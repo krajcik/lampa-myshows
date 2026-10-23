@@ -1,6 +1,6 @@
 (function() {
     "use strict";
-    var VERSION = "1.0.12";
+    var VERSION = "1.1.0";
     var DEFAULT_ADD_THRESHOLD = "0";
     var DEFAULT_MIN_PROGRESS = 90;
     var API_URL = "https://myshows.me/v3/rpc/";
@@ -1071,6 +1071,19 @@
         }
         currentProfileId = newProfileId;
         _profileRenderToken++;
+
+        $('.myshows-details').each(function() {
+            var dispose = $(this).data('myshows-dispose');
+            if (dispose) dispose();
+            $(this).remove();
+        });
+        var activeFull = Lampa.Activity.active();
+        if (activeFull && activeFull.component === 'full' && activeFull.activity) {
+            attachMyShowsCardDetails({ type: 'complite', data: { movie: getCurrentCard() },
+                body: activeFull.activity.render(), link: activeFull.activity });
+        }
+
+
         initSettings();
         cachedShuffledItems = {};
         _unwatchedProgressMap = {};
@@ -5833,7 +5846,241 @@
             }
         });
     }
+    function myShowsCardMatch(items, card, isMovie) {
+        var ids = getCardIdentifiers(card);
+        var titles = [ids.originalName, ids.title].filter(Boolean).map(function(s) {
+            return String(s).toLowerCase().replace(/\s+/g, ' ').trim();
+        });
+        var matches = (items || []).filter(function(row) {
+            var item = row[isMovie ? 'movie' : 'show'];
+            if (!item || !Number.isInteger(item.id) || item.id <= 0) return false;
+            if (ids.imdbId && item.imdbId) return String(ids.imdbId).replace(/^tt/, '') === String(item.imdbId).replace(/^tt/, '');
+            if (ids.kinopoiskId && item.kinopoiskId) return String(ids.kinopoiskId) === String(item.kinopoiskId);
+            if (ids.year && Number(item.year) !== Number(ids.year)) return false;
+            return [item.titleOriginal, item.title].some(function(t) {
+                return t && titles.indexOf(String(t).toLowerCase().replace(/\s+/g, ' ').trim()) !== -1;
+            });
+        });
+        return matches.length === 1 ? matches[0][isMovie ? 'movie' : 'show'].id : null;
+    }
+
+    function myShowsCardRating(value) {
+        return typeof value === 'number' && isFinite(value) && value > 0 && value <= 5 ? value : null;
+    }
+
+    function myShowsCardRpc(state, method, params, callback) {
+        if (!state.alive()) return;
+        var headers = { 'Content-Type': 'application/json' };
+        if (state.token) headers[AUTHORIZATION] = 'Bearer ' + state.token;
+        state.network.silent(API_URL, function(response) {
+            if (!state.alive()) return;
+            if (!response || response.error || !Object.prototype.hasOwnProperty.call(response, 'result')) {
+                callback(null, response && response.error || { message: 'Некорректный ответ MyShows' });
+            } else callback(response.result, null);
+        }, function() {
+            if (state.alive()) callback(null, { message: 'MyShows недоступен' });
+        }, createJSONRPCRequest(method, params), { headers: headers });
+    }
+
+    function myShowsCardLoadRating(state, callback) {
+        if (!state.token) return callback(null, { message: 'Войдите в MyShows' });
+        myShowsCardRpc(state, state.isMovie ? 'profile.Movie' : 'profile.Show',
+            state.isMovie ? { movieId: state.id } : { showId: state.id }, function(data, error) {
+                if (error) return callback(null, error);
+                if (data !== null && (!data || !Object.prototype.hasOwnProperty.call(data, 'rating') ||
+                    (data.rating !== null && (typeof data.rating !== 'number' || data.rating < 0 || data.rating > 5)))) {
+                    return callback(null, { message: 'Некорректный ответ MyShows' });
+                }
+                callback(myShowsCardRating(data && data.rating), null);
+            });
+    }
+
+    function myShowsCardSaveRating(state, rating, callback) {
+        if (state.saving || !state.token || !Number.isInteger(state.id) || state.id <= 0 ||
+            !Number.isInteger(rating) || rating < 0 || rating > 5) {
+            return callback(null, { message: 'Не удалось отправить оценку' });
+        }
+        var params = { rating: rating };
+        params[state.isMovie ? 'movieId' : 'id'] = state.id;
+        state.saving = true;
+        myShowsCardRpc(state, state.isMovie ? 'manage.RateMovie' : 'manage.RateShow', params, function(result, error) {
+            if (error || !result) {
+                state.saving = false;
+                return callback(null, error || { message: 'MyShows не принял оценку' });
+            }
+            myShowsCardLoadRating(state, function(value, readError) {
+                state.saving = false;
+                callback(value, readError || ((value || 0) !== rating ? { message: 'Сохранение оценки не подтверждено' } : null));
+            });
+        });
+    }
+
+    function myShowsCardText(value) {
+        return typeof value === 'string' ? value : '';
+    }
+
+    function myShowsCardEscape(value) {
+        return myShowsCardText(value).replace(/[&<>"']/g, function(c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+    }
+
+    function attachMyShowsCardDetails(e) {
+        if (e.type !== 'complite' || !e.data || !e.data.movie || !e.body) return;
+        var parent = e.body.find('.full-start-new__right').first();
+        if (!parent.length || parent.find('.myshows-details').length) return;
+        var card = e.data.movie;
+        var profile = getProfileId();
+        var block = $('<div class="myshows-details"><div class="myshows-details__heading">MyShows</div><div class="myshows-details__summary">Загрузка…</div><div class="myshows-details__actions"></div></div>');
+        parent.append(block);
+        var state = {
+            id: null,
+            isMovie: !!isMovieContent(card),
+            token: getProfileSetting('myshows_token', ''),
+            network: new Lampa.Reguest(),
+            alive: function() { return document.body.contains(block[0]) && getProfileId() === profile; },
+            current: function() {
+                var active = Lampa.Activity.active();
+                return state.alive() && active && active.component === 'full' && active.activity &&
+                    active.activity.render().find('.myshows-details')[0] === block[0];
+            }
+        };
+        state.network.timeout(12000);
+        block.data('myshows-dispose', function() { state.network.clear(); });
+        if (e.link && e.link.use) e.link.use({ onDestroy: function() { state.network.clear(); } });
+        var summary = block.find('.myshows-details__summary');
+        var actions = block.find('.myshows-details__actions');
+
+        function button(text, action) {
+            var btn = $('<div class="myshows-details__button selector" role="button" tabindex="0"></div>').text(text);
+            btn.on('hover:enter', action);
+            btn.on('hover:focus', function() { if (e.link && e.link.items && e.link.items[0]) e.link.items[0].last = this; });
+            actions.append(btn);
+            return btn;
+        }
+
+        var mine;
+        var currentRating = null;
+        function ratingResult(value, error) {
+            if (!state.alive()) return;
+            currentRating = value;
+            if (error) mine.text(error.code === 401 ? 'Войдите в MyShows заново' : 'Моя оценка: ошибка загрузки');
+            else mine.text(value ? 'Моя оценка: ★ ' + value + '/5' : 'Не оценено');
+        }
+
+        function rate() {
+            if (!state.token) {
+                Lampa.Noty.show('Войдите в MyShows в настройках');
+                return;
+            }
+            var items = [1, 2, 3, 4, 5].map(function(n) {
+                return { title: '★ ' + n + '/5', value: n, selected: currentRating === n };
+            });
+            items.push({ title: 'Убрать оценку', value: 0 });
+            Lampa.Select.show({
+                title: 'Моя оценка MyShows', items: items,
+                onBack: function() { Lampa.Controller.toggle('full_start'); },
+                onSelect: function(item) {
+                    Lampa.Controller.toggle('full_start');
+                    if (!state.alive()) return;
+                    mine.text('Сохраняю оценку…');
+                    myShowsCardSaveRating(state, item.value, function(value, error) {
+                        ratingResult(value, error);
+                        if (error) Lampa.Noty.show('Оценка не подтверждена. Откройте карточку снова для проверки.');
+                        else if (state.current()) Lampa.Noty.show('Оценка MyShows сохранена');
+                    });
+                }
+            });
+        }
+
+        function showText(title, text) {
+            if (!state.current()) return;
+            var content = $('<div class="myshows-details__text"></div>').text(text);
+            Lampa.Modal.open({ title: title, html: content, size: 'large',
+                onBack: function() { Lampa.Modal.close(); Lampa.Controller.toggle('full_start'); } });
+        }
+
+        function contentButton(title, method, params, isReview) {
+            var loaded = false;
+            var rows = [];
+            var control = button(title, function() {
+                if (loaded) return open();
+                control.text(title + ': загрузка…');
+                myShowsCardRpc(state, method, params, function(result, error) {
+                    if (error || (isReview ? !Array.isArray(result) : !result || !Array.isArray(result.comments))) {
+                        control.text(title + ': повторить');
+                        if (state.current()) Lampa.Noty.show('Не удалось загрузить ' + title.toLowerCase());
+                        return;
+                    }
+                    rows = (isReview ? result : result.comments).filter(function(row) {
+                        return row && typeof row === 'object' && !row.isDeleted && !row.isBlocked && !row.isAutoHidden && !row.isBad;
+                    }).slice(0, 10);
+                    loaded = true;
+                    control.text(title + (rows.length ? ' · ' + rows.length + (rows.length === 10 ? ' первых' : '') : ': пока нет'));
+                    if (rows.length) {
+                        var preview = $('<div class="myshows-details__preview"></div>');
+                        preview.text(myShowsCardText(rows[0].title || rows[0].comment || rows[0].content).slice(0, 160));
+                        control.append(preview);
+                    }
+                    open();
+                });
+            });
+            function open() {
+                if (!state.current()) return;
+                if (!rows.length) return Lampa.Noty.show(title + ': пока нет');
+                Lampa.Select.show({ title: title + ' MyShows',
+                    items: rows.map(function(row, index) {
+                        var user = row.siteUser || row.user || {};
+                        return { title: myShowsCardEscape(row.title || user.login) || 'MyShows',
+                            subtitle: myShowsCardEscape(myShowsCardText(row.comment || row.content).slice(0, 120)), index: index };
+                    }),
+                    onBack: function() { Lampa.Controller.toggle('full_start'); },
+                    onSelect: function(item) {
+                        Lampa.Controller.toggle('full_start');
+                        var row = rows[item.index];
+                        if (row) showText(title + ' MyShows', myShowsCardText(row.title) + '\n\n' + myShowsCardText(row.comment || row.content));
+                    }
+                });
+            }
+        }
+
+        function resolved(id) {
+            if (!state.alive()) return;
+            if (!Number.isInteger(id) || id <= 0) { summary.text('Не найдено в MyShows'); return; }
+            state.id = id;
+            myShowsCardRpc(state, state.isMovie ? 'movies.GetById' : 'shows.GetById',
+                state.isMovie ? { movieId: id } : { showId: id, withEpisodes: false }, function(data, error) {
+                    if (error || !data || data.id !== id) { summary.text('Не удалось загрузить рейтинг MyShows'); return; }
+                    var rating = myShowsCardRating(data.rating);
+                    summary.text(rating ? '★ ' + rating.toFixed(2) + '/5 · ' + (Number(data.voted) || 0) + ' голосов' : 'Общий рейтинг: пока нет оценок');
+                });
+            mine = button(state.token ? 'Моя оценка: загрузка…' : 'Войти для оценки', rate);
+            if (state.token) myShowsCardLoadRating(state, ratingResult);
+            if (state.isMovie) contentButton('Комментарии', 'movies.Comments', { movieId: id, language: 'ru' }, false);
+            contentButton('Рецензии', 'entity.GetReviews', { entityID: id, entityType: state.isMovie ? 'movie' : 'show', sort: 'popularity', sortDesc: true, count: 10, lang: 'ru' }, true);
+        }
+
+        var ids = getCardIdentifiers(card);
+        var query = ids && (ids.originalName || ids.title);
+        if (!query) { summary.text('Не найдено в MyShows'); return; }
+        if (Number.isInteger(card.myshowsId) && card.myshowsId > 0) return resolved(card.myshowsId);
+        var search = { query: query };
+        if (ids.year) search.year = Number(ids.year);
+        myShowsCardRpc(state, state.isMovie ? 'movies.GetCatalog' : 'shows.GetCatalog', { search: search }, function(result, error) {
+            if (error || !Array.isArray(result)) { summary.text('MyShows недоступен'); return; }
+            resolved(myShowsCardMatch(result, card, state.isMovie));
+        });
+    }
+
+    function installMyShowsCardDetails() {
+        if (window.__myShowsCardDetailsInstalled) return;
+        window.__myShowsCardDetailsInstalled = true;
+        $('<style>').text('.myshows-details{margin-top:1em;padding:.8em 1em;border:1px solid rgba(255,255,255,.15);border-radius:.6em}.myshows-details__heading{font-weight:600;margin-bottom:.35em}.myshows-details__summary{opacity:.8}.myshows-details__actions{display:flex;flex-wrap:wrap;gap:.45em;margin-top:.6em}.myshows-details__button{padding:.55em .75em;border-radius:.35em;background:rgba(255,255,255,.08);max-width:100%}.myshows-details__button.focus{background:#fff;color:#111}.myshows-details__preview{font-size:.8em;opacity:.65;max-width:35em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:.25em}.myshows-details__text{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.5}').appendTo('body');
+        Lampa.Listener.follow('full', attachMyShowsCardDetails);
+    }
+
     function boot() {
+        installMyShowsCardDetails();
         initMyShowsPlugin();
         try {
             Lampa.Manifest.plugins = {
