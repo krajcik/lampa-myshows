@@ -1,6 +1,6 @@
 (function() {
     "use strict";
-    var VERSION = "1.2.0";
+    var VERSION = "1.2.1";
     var DEFAULT_ADD_THRESHOLD = "0";
     var DEFAULT_MIN_PROGRESS = 90;
     var API_URL = "https://myshows.me/v3/rpc/";
@@ -6208,7 +6208,7 @@
         if (window.__myShowsCardDetailsInstalled) return;
         window.__myShowsCardDetailsInstalled = true;
         $('<style>').text('.myshows-details{margin-top:1em;padding:.8em 1em;border:1px solid rgba(255,255,255,.15);border-radius:.6em}.myshows-details__heading{font-weight:600;margin-bottom:.35em}.myshows-details__summary{opacity:.8}.myshows-details__actions{display:flex;flex-wrap:wrap;gap:.45em;margin-top:.6em}.myshows-details__button{padding:.55em .75em;border-radius:.35em;background:rgba(255,255,255,.08);max-width:100%}.myshows-details__button.focus{background:#fff;color:#111}.myshows-details__preview{font-size:.8em;opacity:.65;max-width:35em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:.25em}.myshows-details__text{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.5}').appendTo('body');
-        $('<style>').text('.card__view .myshows-poster-rating{position:absolute;z-index:2;top:2.2em;left:.45em;padding:.18em .35em;background:rgba(0,0,0,.82);color:#fff;border-radius:.25em;font-size:.8em;font-weight:600;pointer-events:none}').appendTo('body');
+        $('<style>').text('.card__view .myshows-poster-rating{position:absolute;z-index:2;top:2.8em;left:.3em;padding:.2em .5em;background:rgba(0,0,0,.82);color:#fff;border-radius:1em;font-size:1.3em;font-weight:700;pointer-events:none}').appendTo('body');
         Lampa.Listener.follow('full', attachMyShowsCardDetails);
         document.addEventListener('visible', function(event) {
             var el = event.target;

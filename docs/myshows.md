@@ -10,7 +10,7 @@ title: MyShows — Lampa Plugins
 📺 Плагин MyShows для [Lampac](https://github.com/immisterio/Lampac) и [Lampa](http://lampa.mx/)  
 Автоматическая синхронизация просмотра сериалов и фильмов с MyShows.me  
 
-## Дополнения нашего форка, 1.2.0
+## Дополнения нашего форка, 1.2.1
 
 Установка: `https://krajcik.github.io/lampa-myshows/myshows.js#`.
 
@@ -44,8 +44,8 @@ title: MyShows — Lampa Plugins
 
 Проверка: `node --test tests/myshows-card.test.cjs`. Для Lite:
 `MYSHOWS_TEST_SOURCE=myshows.lite.js node --test tests/myshows-card.test.cjs`.
-Full и Lite обновляются вместе. Минифицированный JS собирается установленным Bun:
-`bun build myshows.lite.js --target browser --format iife --minify-whitespace --minify-identifiers --outfile myshows.js`.
+Full и Lite обновляются вместе. Минифицированный JS собирается Terser 5.51.2:
+`npx --yes terser@5.51.2 myshows.lite.js --compress --mangle --ecma 5 --output myshows.js`.
 
 ![Пример работы плагина](https://raw.githubusercontent.com/Igorek1986/lampa-plugins/main/docs/MyShows.png)
 
