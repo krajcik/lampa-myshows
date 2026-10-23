@@ -123,3 +123,31 @@ test('async buttons join only their foreground card navigation without resetting
     ctx.myShowsCardRegisterButton(card, button);
     assert.equal(appended.length, 1);
 });
+
+test('late status buttons do not hijack a menu or discard the new card controls', () => {
+    vm.runInContext(source.slice(source.indexOf('    function createMyShowsButtons('), source.indexOf('    function updateButtonStates(')), ctx);
+    Object.assign(ctx, { watch_icon: '', later_icon: '', remove_icon: '', cancelled_icon: '' });
+    for (const foreground of [true, false]) for (const controller of ['full_start', 'select']) {
+        const nodes = [], data = {};
+        const container = {
+            length: 1,
+            data(key, value) { if (value !== undefined) data[key] = value; return data[key]; },
+            find() { return nodes; }, append(node) { nodes.push(node); }, addClass() { return this; },
+        };
+        const activity = { render: () => ({ find: () => container }) };
+        let appended = 0;
+        ctx.$ = () => { const node = { on() { return node; }, is() { return true; } }; return node; };
+        ctx.Lampa = {
+            Activity: { active: () => ({ component: 'full', activity: foreground ? activity : {} }) },
+            Controller: { enabled: () => ({ name: controller }),
+                collectionSet: () => assert.fail('late status callback reset navigation'),
+                collectionFocus: () => assert.fail('late status callback stole focus'),
+                collectionAppend: items => { appended += items.length; },
+            },
+        };
+        ctx.window = { Lampa: ctx.Lampa };
+        ctx.createMyShowsButtons({ object: { activity }, data: { movie: {} } }, 'watching', false);
+        assert.equal(nodes.length, 4);
+        assert.equal(appended, foreground && controller === 'full_start' ? 4 : 0);
+    }
+});

@@ -1,6 +1,6 @@
 (function() {
     "use strict";
-    var VERSION = "1.1.1";
+    var VERSION = "1.1.2";
     var DEFAULT_ADD_THRESHOLD = "0";
     var DEFAULT_MIN_PROGRESS = 90;
     var API_URL = "https://myshows.me/v3/rpc/";
@@ -3709,15 +3709,14 @@
             if (!isMovie) e.object.activity.render().find(".full-start-new__buttons").addClass("myshows-btn-series");
             e.object.activity.render().find(".full-start-new__buttons").append(btn);
         });
-        if (window.Lampa && window.Lampa.Controller) {
-            var container = e.object.activity.render().find(".full-start-new__buttons");
-            var allButtons = container.find("> *").filter(function() {
-                return $(this).is(":visible");
-            });
-            Lampa.Controller.collectionSet(container);
-            if (allButtons.length > 0) Lampa.Controller.collectionFocus(allButtons.eq(0)[0], container);
+        var active = Lampa.Activity.active();
+        if (active && active.component === 'full' && active.activity === e.object.activity &&
+            Lampa.Controller.enabled().name === 'full_start') {
+            var container = e.object.activity.render().find('.full-start-new__buttons');
+            Lampa.Controller.collectionAppend(container.find('.myshows-btn'));
         }
     }
+
     function updateButtonStates(newStatus, isMovie, useAnimation) {
         var selector = '.full-start__button[class*="myshows-"]';
         var statusMap = isMovie ? {

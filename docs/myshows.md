@@ -10,7 +10,7 @@ title: MyShows — Lampa Plugins
 📺 Плагин MyShows для [Lampac](https://github.com/immisterio/Lampac) и [Lampa](http://lampa.mx/)  
 Автоматическая синхронизация просмотра сериалов и фильмов с MyShows.me  
 
-## Дополнения нашего форка, 1.1.1
+## Дополнения нашего форка, 1.1.2
 
 Установка: `https://krajcik.github.io/lampa-myshows/myshows.js#`.
 

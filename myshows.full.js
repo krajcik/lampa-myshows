@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var VERSION = '1.1.1';
+    var VERSION = '1.1.2';
 
     var DEFAULT_ADD_THRESHOLD = '0';
     var DEFAULT_MIN_PROGRESS = 90;
@@ -5827,17 +5827,12 @@
             e.object.activity.render().find('.full-start-new__buttons').append(btn);
         });
 
-        // Общая логика инициализации контроллера
-        if (window.Lampa && window.Lampa.Controller) {
+        // Поздний ответ не должен подменять навигацию открытого меню или другой карточки.
+        var active = Lampa.Activity.active();
+        if (active && active.component === 'full' && active.activity === e.object.activity &&
+            Lampa.Controller.enabled().name === 'full_start') {
             var container = e.object.activity.render().find('.full-start-new__buttons');
-            var allButtons = container.find('> *').filter(function(){
-                return $(this).is(':visible');
-            });
-
-            Lampa.Controller.collectionSet(container);
-            if (allButtons.length > 0) {
-                Lampa.Controller.collectionFocus(allButtons.eq(0)[0], container);
-            }
+            Lampa.Controller.collectionAppend(container.find('.myshows-btn'));
         }
     }
 
