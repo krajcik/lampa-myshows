@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var VERSION = '1.1.0';
+    var VERSION = '1.1.1';
 
     var DEFAULT_ADD_THRESHOLD = '0';
     var DEFAULT_MIN_PROGRESS = 90;
@@ -8702,6 +8702,12 @@
         });
     }
 
+    function myShowsCardRegisterButton(state, button) {
+        if (state.current() && Lampa.Controller.enabled().name === 'full_start') {
+            Lampa.Controller.collectionAppend(button);
+        }
+    }
+
     function attachMyShowsCardDetails(e) {
         if (e.type !== 'complite' || !e.data || !e.data.movie || !e.body) return;
         var parent = e.body.find('.full-start-new__right').first();
@@ -8734,6 +8740,7 @@
             // Start запоминает фокус только исходных кнопок, добавленных при create().
             btn.on('hover:focus', function() { if (e.link && e.link.items && e.link.items[0]) e.link.items[0].last = this; });
             actions.append(btn);
+            myShowsCardRegisterButton(state, btn);
             return btn;
         }
 

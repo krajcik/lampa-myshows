@@ -103,3 +103,23 @@ test('API text is escaped before entering Lampa Select HTML templates', () => {
     assert.equal(ctx.myShowsCardEscape('<img onerror="alert(1)"> & test'), '&lt;img onerror=&quot;alert(1)&quot;&gt; &amp; test');
     assert.equal(ctx.myShowsCardText({ html: 'unexpected object' }), '');
 });
+
+test('async buttons join only their foreground card navigation without resetting focus', () => {
+    const appended = [];
+    let controller = 'full_start', current = true;
+    ctx.Lampa = { Controller: {
+        enabled: () => ({ name: controller }),
+        collectionAppend: button => appended.push(button),
+        collectionSet: () => assert.fail('must not reset the active navigation'),
+    } };
+    const button = { name: 'rating button' };
+    const card = { current: () => current };
+    ctx.myShowsCardRegisterButton(card, button);
+    assert.deepEqual(appended, [button]);
+    current = false;
+    ctx.myShowsCardRegisterButton(card, button);
+    current = true;
+    controller = 'select';
+    ctx.myShowsCardRegisterButton(card, button);
+    assert.equal(appended.length, 1);
+});
