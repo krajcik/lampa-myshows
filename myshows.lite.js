@@ -1,6 +1,6 @@
 (function() {
     "use strict";
-    var VERSION = "1.1.2";
+    var VERSION = "1.2.0";
     var DEFAULT_ADD_THRESHOLD = "0";
     var DEFAULT_MIN_PROGRESS = 90;
     var API_URL = "https://myshows.me/v3/rpc/";
@@ -5851,7 +5851,7 @@
             return String(s).toLowerCase().replace(/\s+/g, ' ').trim();
         });
         var matches = (items || []).filter(function(row) {
-            var item = row[isMovie ? 'movie' : 'show'];
+            var item = row && row[isMovie ? 'movie' : 'show'];
             if (!item || !Number.isInteger(item.id) || item.id <= 0) return false;
             if (ids.imdbId && item.imdbId) return String(ids.imdbId).replace(/^tt/, '') === String(item.imdbId).replace(/^tt/, '');
             if (ids.kinopoiskId && item.kinopoiskId) return String(ids.kinopoiskId) === String(item.kinopoiskId);
@@ -5865,6 +5865,130 @@
 
     function myShowsCardRating(value) {
         return typeof value === 'number' && isFinite(value) && value > 0 && value <= 5 ? value : null;
+    }
+
+    function myShowsCardScore(value) {
+        var rating = myShowsCardRating(value);
+        return rating ? (rating * 2).toFixed(1) : null;
+    }
+
+    function myShowsCardPersonalLabel(value) {
+        var rating = myShowsCardRating(value);
+        return rating ? 'Моя оценка: ★ ' + (rating * 2) + '/10' : 'Не оценено';
+    }
+
+    var myShowsPosterCache;
+    var myShowsPosterPending = {};
+    var myShowsPosterQueue = [];
+    var myShowsPosterActive = 0;
+    var myShowsPosterRetry = {};
+
+    function myShowsPosterKey(card) {
+        if (!card || !Number.isInteger(card.id) || card.id <= 0 || card.profile_path) return null;
+        var type = card.media_type === 'tv' || card.original_name || card.first_air_date || card.number_of_seasons ? 'tv' :
+            card.media_type === 'movie' || card.original_title || card.release_date ? 'movie' : null;
+        if (!type) return null;
+        return type + ':' + card.id + ':' + (card.original_name || card.original_title || card.name || card.title || '') +
+            ':' + String(card.first_air_date || card.release_date || card.year || '').slice(0, 4);
+    }
+
+    function myShowsPosterRead(key) {
+        if (!myShowsPosterCache) {
+            myShowsPosterCache = Lampa.Storage.get('myshows_poster_ratings', {});
+            if (!myShowsPosterCache || typeof myShowsPosterCache !== 'object' || Array.isArray(myShowsPosterCache)) myShowsPosterCache = {};
+        }
+        var item = myShowsPosterCache[key];
+        if (!item || typeof item.at !== 'number' || Date.now() - item.at > (item.rating ? 86400000 : 3600000)) return null;
+        return item;
+    }
+
+    function myShowsPosterRemember(key, id, rating, voted) {
+        myShowsPosterRead(key);
+        var item = { id: id, rating: myShowsCardRating(rating), voted: Number(voted) || 0, at: Date.now() };
+        myShowsPosterCache[key] = item;
+        var keys = Object.keys(myShowsPosterCache).sort(function(a, b) {
+            return (myShowsPosterCache[b].at || 0) - (myShowsPosterCache[a].at || 0);
+        });
+        keys.slice(500).forEach(function(k) { delete myShowsPosterCache[k]; });
+        Lampa.Storage.set('myshows_poster_ratings', myShowsPosterCache);
+        return item;
+    }
+
+    function myShowsPosterDraw(element, key, item) {
+        if (!document.body.contains(element) || myShowsPosterKey(element.card_data) !== key) return;
+        var view = element.querySelector('.card__view');
+        if (!view) return;
+        var badge = view.querySelector('.myshows-poster-rating');
+        var score = myShowsCardScore(item.rating);
+        if (!score) { if (badge) badge.remove(); return; }
+        if (!badge) {
+            badge = document.createElement('div');
+            badge.className = 'myshows-poster-rating';
+            view.appendChild(badge);
+        }
+        badge.textContent = 'MS ' + score;
+        badge.title = 'Рейтинг MyShows из 10';
+        badge.dataset.myshowsKey = key;
+    }
+
+    function myShowsPosterPump() {
+        while (myShowsPosterActive < 2 && myShowsPosterQueue.length) {
+            (function(entry) {
+                entry.targets = entry.targets.filter(function(el) { return document.body.contains(el); });
+                if (!entry.targets.length) { delete myShowsPosterPending[entry.key]; return; }
+                myShowsPosterActive++;
+                var state = { token: '', alive: function() { return true; }, network: new Lampa.Reguest() };
+                state.network.timeout(10000);
+                var movie = entry.key.indexOf('movie:') === 0;
+                var ids = getCardIdentifiers(entry.card);
+                var knownId = entry.card.myshowsId;
+                var known = Number.isInteger(knownId) && knownId > 0;
+                var search = { query: ids.originalName || ids.title };
+                if (ids.year) search.year = Number(ids.year);
+                myShowsCardRpc(state, (movie ? 'movies.' : 'shows.') + (known ? 'GetById' : 'GetCatalog'),
+                    known ? (movie ? { movieId: knownId } : { showId: knownId, withEpisodes: false }) : { search: search }, function(result, error) {
+                        var item = null;
+                        if (!error && known && result && result.id === knownId) item = result;
+                        else if (!error && !known && Array.isArray(result)) {
+                            var id = myShowsCardMatch(result, entry.card, movie);
+                            result.some(function(row) {
+                                var media = row && row[movie ? 'movie' : 'show'];
+                                if (media && media.id === id) { item = media; return true; }
+                                return false;
+                            });
+                        } else error = error || { message: 'Некорректный ответ MyShows' };
+                        if (!error) {
+                            var cached = myShowsPosterRemember(entry.key, item && item.id, item && item.rating, item && item.voted);
+                            entry.targets.forEach(function(el) { myShowsPosterDraw(el, entry.key, cached); });
+                        } else myShowsPosterRetry[entry.key] = Date.now() + 60000;
+                        delete myShowsPosterPending[entry.key];
+                        myShowsPosterActive--;
+                        myShowsPosterPump();
+                    });
+            })(myShowsPosterQueue.shift());
+        }
+    }
+
+    function queueMyShowsPosterRating(element) {
+        var card = element && element.card_data;
+        var key = myShowsPosterKey(card);
+        if (!key || !document.body.contains(element)) return;
+        var ids = getCardIdentifiers(card);
+        if (!ids || !(ids.originalName || ids.title)) return;
+        var oldBadge = element.querySelector('.myshows-poster-rating');
+        if (oldBadge && oldBadge.dataset.myshowsKey !== key) oldBadge.remove();
+        var cached = myShowsPosterRead(key);
+        if (cached) return myShowsPosterDraw(element, key, cached);
+        if (myShowsPosterRetry[key] > Date.now()) return;
+        var entry = myShowsPosterPending[key];
+        if (entry) {
+            if (entry.targets.indexOf(element) === -1) entry.targets.push(element);
+            return;
+        }
+        entry = { key: key, card: card, targets: [element] };
+        myShowsPosterPending[key] = entry;
+        myShowsPosterQueue.push(entry);
+        myShowsPosterPump();
     }
 
     function myShowsCardRpc(state, method, params, callback) {
@@ -5896,7 +6020,7 @@
 
     function myShowsCardSaveRating(state, rating, callback) {
         if (state.saving || !state.token || !Number.isInteger(state.id) || state.id <= 0 ||
-            !Number.isInteger(rating) || rating < 0 || rating > 5) {
+            typeof rating !== 'number' || !Number.isInteger(rating * 2) || rating < 0 || rating > 5) {
             return callback(null, { message: 'Не удалось отправить оценку' });
         }
         var params = { rating: rating };
@@ -5971,7 +6095,7 @@
             if (!state.alive()) return;
             currentRating = value;
             if (error) mine.text(error.code === 401 ? 'Войдите в MyShows заново' : 'Моя оценка: ошибка загрузки');
-            else mine.text(value ? 'Моя оценка: ★ ' + value + '/5' : 'Не оценено');
+            else mine.text(myShowsCardPersonalLabel(value));
         }
 
         function rate() {
@@ -5979,8 +6103,8 @@
                 Lampa.Noty.show('Войдите в MyShows в настройках');
                 return;
             }
-            var items = [1, 2, 3, 4, 5].map(function(n) {
-                return { title: '★ ' + n + '/5', value: n, selected: currentRating === n };
+            var items = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(function(n) {
+                return { title: '★ ' + n + '/10', value: n / 2, selected: currentRating === n / 2 };
             });
             items.push({ title: 'Убрать оценку', value: 0 });
             Lampa.Select.show({
@@ -6058,7 +6182,9 @@
                 state.isMovie ? { movieId: id } : { showId: id, withEpisodes: false }, function(data, error) {
                     if (error || !data || data.id !== id) { summary.text('Не удалось загрузить рейтинг MyShows'); return; }
                     var rating = myShowsCardRating(data.rating);
-                    summary.text(rating ? '★ ' + rating.toFixed(2) + '/5 · ' + (Number(data.voted) || 0) + ' голосов' : 'Общий рейтинг: пока нет оценок');
+                    summary.text(rating ? '★ ' + myShowsCardScore(rating) + '/10 · ' + (Number(data.voted) || 0) + ' голосов' : 'Общий рейтинг: пока нет оценок');
+                    var key = myShowsPosterKey(card);
+                    if (key) myShowsPosterRemember(key, id, rating, data.voted);
                 });
             mine = button(state.token ? 'Моя оценка: загрузка…' : 'Войти для оценки', rate);
             if (state.token) myShowsCardLoadRating(state, ratingResult);
@@ -6082,7 +6208,16 @@
         if (window.__myShowsCardDetailsInstalled) return;
         window.__myShowsCardDetailsInstalled = true;
         $('<style>').text('.myshows-details{margin-top:1em;padding:.8em 1em;border:1px solid rgba(255,255,255,.15);border-radius:.6em}.myshows-details__heading{font-weight:600;margin-bottom:.35em}.myshows-details__summary{opacity:.8}.myshows-details__actions{display:flex;flex-wrap:wrap;gap:.45em;margin-top:.6em}.myshows-details__button{padding:.55em .75em;border-radius:.35em;background:rgba(255,255,255,.08);max-width:100%}.myshows-details__button.focus{background:#fff;color:#111}.myshows-details__preview{font-size:.8em;opacity:.65;max-width:35em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:.25em}.myshows-details__text{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.5}').appendTo('body');
+        $('<style>').text('.card__view .myshows-poster-rating{position:absolute;z-index:2;top:2.2em;left:.45em;padding:.18em .35em;background:rgba(0,0,0,.82);color:#fff;border-radius:.25em;font-size:.8em;font-weight:600;pointer-events:none}').appendTo('body');
         Lampa.Listener.follow('full', attachMyShowsCardDetails);
+        document.addEventListener('visible', function(event) {
+            var el = event.target;
+            if (el && el.classList && el.classList.contains('card')) {
+                if (el.card_data) queueMyShowsPosterRating(el);
+                else setTimeout(function() { queueMyShowsPosterRating(el); }, 0);
+            }
+        }, true);
+        document.querySelectorAll('.card.layer--visible').forEach(queueMyShowsPosterRating);
     }
 
     function boot() {

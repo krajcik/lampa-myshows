@@ -37,7 +37,7 @@ test('matches films and shows conservatively, preserving Cyrillic and release ye
 });
 
 test('reads an existing personal score, and distinguishes unrated from malformed/error responses', () => {
-    for (const rating of [0, null, 4, 5]) {
+    for (const rating of [0, null, 4, 4.5, 5]) {
         const { value } = state([{ result: { rating } }]);
         ctx.myShowsCardLoadRating(value, (actual, error) => {
             assert.equal(error, null);
@@ -80,7 +80,7 @@ test('rejects invalid/unauthenticated writes, and does not retry an uncertain wr
         ctx.myShowsCardSaveRating(value, 4, (_, error) => assert.ok(error));
         assert.equal(calls.length, 0);
     }
-    for (const rating of [-1, 6, 3.5, '4']) {
+    for (const rating of [-1, 6, 3.25, '4']) {
         const { value, calls } = state([]);
         ctx.myShowsCardSaveRating(value, rating, (_, error) => assert.ok(error));
         assert.equal(calls.length, 0);
@@ -88,6 +88,19 @@ test('rejects invalid/unauthenticated writes, and does not retry an uncertain wr
     const { value, calls } = state(['network-error']);
     ctx.myShowsCardSaveRating(value, 4, (_, error) => assert.ok(error));
     assert.equal(calls.length, 1);
+});
+
+test('converts aggregate and personal scores to ten without inventing an unrated score', () => {
+    assert.equal(ctx.myShowsCardScore(4.46), '8.9');
+    assert.equal(ctx.myShowsCardScore(5), '10.0');
+    assert.equal(ctx.myShowsCardScore(0), null);
+    assert.equal(ctx.myShowsCardScore('4.46'), null);
+    assert.equal(ctx.myShowsCardPersonalLabel(4.5), 'Моя оценка: ★ 9/10');
+    assert.equal(ctx.myShowsCardPersonalLabel(5), 'Моя оценка: ★ 10/10');
+    assert.equal(ctx.myShowsCardPersonalLabel(null), 'Не оценено');
+    const { value, calls } = state([{ result: true }, { result: { rating: 4.5 } }]);
+    ctx.myShowsCardSaveRating(value, 4.5, (rating, error) => { assert.equal(rating, 4.5); assert.equal(error, null); });
+    assert.equal(calls[0].params.rating, 4.5);
 });
 
 test('late responses from a closed card or previous profile cannot update its UI', () => {
@@ -150,4 +163,53 @@ test('late status buttons do not hijack a menu or discard the new card controls'
         assert.equal(nodes.length, 4);
         assert.equal(appended, foreground && controller === 'full_start' ? 4 : 0);
     }
+});
+
+test('poster requests are deduplicated, bounded, cached and never paint a reused card', () => {
+    const requests = [];
+    ctx.myShowsPosterCache = undefined;
+    ctx.myShowsPosterPending = {};
+    ctx.myShowsPosterQueue = [];
+    ctx.myShowsPosterRetry = {};
+    ctx.myShowsPosterActive = 0;
+    ctx.Lampa = {
+        Storage: { get: () => ({}), set() {} },
+        Reguest: function() {
+            this.timeout = () => {};
+            this.silent = (url, ok, fail, body, options) => requests.push({ ok, fail, ...JSON.parse(body), options });
+        },
+    };
+    ctx.document = { body: { contains: el => el.attached }, createElement: () => ({ dataset: {} }) };
+    function poster(id, title) {
+        const view = { badge: null, querySelector: () => view.badge,
+            appendChild(node) { view.badge = node; node.remove = () => { view.badge = null; }; } };
+        return { attached: true, card_data: { id, title, media_type: 'movie', year: 2024 }, view,
+            querySelector: selector => selector === '.card__view' ? view : view.badge };
+    }
+    const a = poster(1, 'Film A'), duplicate = poster(1, 'Film A'), b = poster(2, 'Film B'), offscreen = poster(3, 'Film C');
+    [a, duplicate, b, offscreen].forEach(ctx.queueMyShowsPosterRating);
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].options.headers.authorization2, undefined);
+    offscreen.attached = false;
+    requests[0].ok({ result: [{ movie: { id: 101, title: 'Film A', year: 2024, rating: 4.46, voted: 100 } }] });
+    assert.equal(a.view.badge.textContent, 'MS 8.9');
+    assert.equal(duplicate.view.badge.textContent, 'MS 8.9');
+    assert.equal(requests.length, 2);
+    b.card_data.id = 99;
+    requests[1].ok({ result: [{ movie: { id: 102, title: 'Film B', year: 2024, rating: 5 } }] });
+    assert.equal(b.view.badge, null);
+    const cached = poster(1, 'Film A');
+    ctx.queueMyShowsPosterRating(cached);
+    assert.equal(cached.view.badge.textContent, 'MS 8.9');
+    assert.equal(requests.length, 2);
+    ctx.myShowsPosterCache[ctx.myShowsPosterKey(a.card_data)].at = Date.now() - 86400001;
+    const expired = poster(1, 'Film A');
+    ctx.queueMyShowsPosterRating(expired);
+    assert.equal(requests.length, 3);
+    requests[2].fail();
+    ctx.queueMyShowsPosterRating(expired);
+    assert.equal(requests.length, 3);
+    assert.equal(expired.view.badge, null);
+    assert.equal(ctx.myShowsPosterKey({ id: 1, profile_path: '/person.jpg', media_type: 'movie' }), null);
+    assert.notEqual(ctx.myShowsPosterKey(a.card_data), ctx.myShowsPosterKey({ ...a.card_data, title: 'Another Film' }));
 });
